@@ -28,7 +28,7 @@ class JiraClient
     /**
      * JIRA REST API URI.
      */
-    private string $api_uri = '/rest/api/3';
+    protected string $api_uri = '/rest/api/3';
 
     /**
      * CURL instance.
@@ -252,7 +252,9 @@ class JiraClient
 
         $this->log->debug('Curl exec='.$url);
         $response = curl_exec($ch);
-
+        echo $url . PHP_EOL;
+var_dump($response);
+exit;
         // if request failed or have no result.
         if (!$response) {
             $this->http_response = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -561,7 +563,7 @@ class JiraClient
     /**
      * Config a curl handle with proxy configuration (if set) from ConfigurationInterface.
      */
-    private function proxyConfigCurlHandle(\CurlHandle $ch): void
+    protected function proxyConfigCurlHandle(\CurlHandle $ch): void
     {
         // Add proxy settings to the curl.
         if ($this->getConfiguration()->getProxyServer()) {

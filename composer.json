@@ -2,7 +2,7 @@
     "name": "smartsolutions/jira-cloud-restapi",
     "description": "JIRA Cloud REST API",
     "type": "library",
-    "version": "2025.08.1.0",
+    "version": "2025.08.1.1",
     "keywords": ["jira", "rest", "jira-php", "jira-rest", "jira-cloud"],
     "require": {
         "php": "^8.1",

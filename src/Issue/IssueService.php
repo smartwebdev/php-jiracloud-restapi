@@ -481,7 +481,6 @@ class IssueService extends \JiraCloud\JiraClient
      * Search issues.
      *
      * @param string $jql
-     * @param int    $startAt
      * @param int    $maxResults
      * @param array  $fields
      * @param array  $expand
@@ -492,18 +491,84 @@ class IssueService extends \JiraCloud\JiraClient
      *
      * @return IssueSearchResult
      */
-    public function search(string $jql, int $startAt = 0, int $maxResults = 15, array $fields = [], array $expand = [], bool $validateQuery = true): IssueSearchResult
+    public function search(string $jql, int $maxResults = 15, array $fields = ["*all"], array $expand = [], bool $validateQuery = true): IssueSearchResult
     {
         $data = json_encode([
             'jql'           => $jql,
-            'startAt'       => $startAt,
             'maxResults'    => $maxResults,
-            'fields'        => $fields,
-            'expand'        => $expand,
-            'validateQuery' => $validateQuery,
+            'fields'        => $fields
         ]);
 
-        $ret = $this->exec('search', $data, 'POST');
+        // Build the URL manually to avoid the context mangling issue
+        $url = $this->getConfiguration()->getJiraHost() . $this->api_uri . '/search/jql';
+
+        if (is_string($data)) {
+            $this->log->info("Curl POST: $url JsonData=".$data);
+        } elseif (is_array($data)) {
+            $this->log->info("Curl POST: $url JsonData=".json_encode($data, JSON_UNESCAPED_UNICODE));
+        }
+
+        curl_reset($this->curl);
+        $ch = $this->curl;
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
+
+        // save HTTP Headers
+        $curl_http_headers = [
+            'Accept: */*',
+            'Content-Type: application/json',
+            'X-Atlassian-Token: no-check',
+        ];
+
+        $curl_http_headers = $this->curlPrepare($ch, $curl_http_headers, null);
+        curl_setopt($ch, CURLOPT_USERAGENT, $this->getConfiguration()->getCurlOptUserAgent());
+
+        // curl_setopt(): CURLOPT_FOLLOWLOCATION cannot be activated when an open_basedir is set
+        if (!function_exists('ini_get') || !ini_get('open_basedir')) {
+            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        }
+
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $curl_http_headers);
+        curl_setopt($ch, CURLOPT_VERBOSE, $this->getConfiguration()->isCurlOptVerbose());
+
+        // Add proxy settings to the curl.
+        $this->proxyConfigCurlHandle($ch);
+
+        $this->log->debug('Curl exec='.$url);
+        $ret = curl_exec($ch);
+
+        // if request failed or have no result.
+        if (!$ret) {
+            $this->http_response = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $body = curl_error($ch);
+
+            /*
+             * 201: The request has been fulfilled, resulting in the creation of a new resource.
+             * 204: The server successfully processed the request, but is not returning any content.
+             */
+            if ($this->http_response === 204 || $this->http_response === 201 || $this->http_response === 200) {
+                return true;
+            }
+
+            // HostNotFound, No route to Host, etc Network error
+            $msg = sprintf('CURL Error: http response=%d, %s', $this->http_response, $body);
+
+            $this->log->error($msg);
+
+            throw new JiraException($msg);
+        } else {
+            // if request was ok, parsing http response code.
+            $this->http_response = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+            // don't check 301, 302 because setting CURLOPT_FOLLOWLOCATION
+            if ($this->http_response != 200 && $this->http_response != 201) {
+                throw new JiraException('CURL HTTP Request Failed: Status Code : '
+                    .$this->http_response.', URL:'.$url
+                    ."\nError Message : ".$ret, $this->http_response, null, $ret);
+            }
+        }
         $json = json_decode($ret);
 
         $result = $this->json_mapper->map(
@@ -512,6 +577,159 @@ class IssueService extends \JiraCloud\JiraClient
         );
 
         return $result;
+    }
+
+    /**
+     * Search issues with pagination support using nextPageToken.
+     *
+     * @param string $jql
+     * @param int $maxResults
+     * @param array $fields
+     * @param array $expand
+     * @param bool $validateQuery
+     * @param string|null $nextPageToken
+     *
+     * @throws \JsonMapper_Exception
+     * @throws JiraException
+     *
+     * @return IssueSearchResult
+     */
+    public function searchWithPagination(string $jql, int $maxResults = 15, array $fields = ["*all"], array $expand = [], bool $validateQuery = true, ?string $nextPageToken = null): IssueSearchResult
+    {
+        $data = [
+            'jql'           => $jql,
+            'maxResults'    => $maxResults,
+            'fields'        => $fields
+        ];
+
+        // Add nextPageToken if provided
+        if ($nextPageToken !== null) {
+            $data['nextPageToken'] = $nextPageToken;
+        }
+
+        $data = json_encode($data);
+
+        // Build the URL manually to avoid the context mangling issue
+        $url = $this->getConfiguration()->getJiraHost() . $this->api_uri . '/search/jql';
+
+        if (is_string($data)) {
+            $this->log->info("Curl POST: $url JsonData=".$data);
+        } elseif (is_array($data)) {
+            $this->log->info("Curl POST: $url JsonData=".json_encode($data, JSON_UNESCAPED_UNICODE));
+        }
+
+        curl_reset($this->curl);
+        $ch = $this->curl;
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
+
+        // save HTTP Headers
+        $curl_http_headers = [
+            'Accept: */*',
+            'Content-Type: application/json',
+            'X-Atlassian-Token: no-check',
+        ];
+
+        $curl_http_headers = $this->curlPrepare($ch, $curl_http_headers, null);
+        curl_setopt($ch, CURLOPT_USERAGENT, $this->getConfiguration()->getCurlOptUserAgent());
+
+        // curl_setopt(): CURLOPT_FOLLOWLOCATION cannot be activated when an open_basedir is set
+        if (!function_exists('ini_get') || !ini_get('open_basedir')) {
+            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        }
+
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $curl_http_headers);
+        curl_setopt($ch, CURLOPT_VERBOSE, $this->getConfiguration()->isCurlOptVerbose());
+
+        // Add proxy settings to the curl.
+        $this->proxyConfigCurlHandle($ch);
+
+        $this->log->debug('Curl exec='.$url);
+        $ret = curl_exec($ch);
+
+        // if request failed or have no result.
+        if (!$ret) {
+            $this->http_response = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $body = curl_error($ch);
+
+            /*
+             * 201: The request has been fulfilled, resulting in the creation of a new resource.
+             * 204: The server successfully processed the request, but is not returning any content.
+             */
+            if ($this->http_response === 204 || $this->http_response === 201 || $this->http_response === 200) {
+                return true;
+            }
+
+            // HostNotFound, No route to Host, etc Network error
+            $msg = sprintf('CURL Error: http response=%d, %s', $this->http_response, $body);
+
+            $this->log->error($msg);
+
+            throw new JiraException($msg);
+        } else {
+            // if request was ok, parsing http response code.
+            $this->http_response = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+            // don't check 301, 302 because setting CURLOPT_FOLLOWLOCATION
+            if ($this->http_response != 200 && $this->http_response != 201) {
+                throw new JiraException('CURL HTTP Request Failed: Status Code : '
+                    .$this->http_response.', URL:'.$url
+                    ."\nError Message : ".$ret, $this->http_response, null, $ret);
+            }
+        }
+        $json = json_decode($ret);
+
+        $result = $this->json_mapper->map(
+            $json,
+            new IssueSearchResult()
+        );
+
+        return $result;
+    }
+
+    /**
+     * Search all issues with automatic pagination using nextPageToken.
+     *
+     * @param string $jql
+     * @param int $maxResults
+     * @param array $fields
+     * @param array $expand
+     * @param bool $validateQuery
+     *
+     * @throws \JsonMapper_Exception
+     * @throws JiraException
+     *
+     * @return array Array of all issues from all pages
+     */
+    public function searchAll(string $jql, int $maxResults = 50, array $fields = ["*all"], array $expand = [], bool $validateQuery = true): array
+    {
+        $allIssues = [];
+        $nextPageToken = null;
+        $pageCount = 0;
+
+        do {
+            $pageCount++;
+            $this->log->info("Fetching page {$pageCount} for JQL: {$jql}");
+            
+            $result = $this->searchWithPagination($jql, $maxResults, $fields, $expand, $validateQuery, $nextPageToken);
+            
+            // Add issues from this page to the collection
+            if (isset($result->issues) && is_array($result->issues)) {
+                $allIssues = array_merge($allIssues, $result->issues);
+            }
+            
+            // Get the next page token for the next iteration
+            $nextPageToken = $result->nextPageToken ?? null;
+            
+            $this->log->info("Page {$pageCount}: Retrieved " . count($result->issues ?? []) . " issues. Total so far: " . count($allIssues));
+            
+        } while ($nextPageToken !== null);
+
+        $this->log->info("Completed pagination. Total issues retrieved: " . count($allIssues) . " across {$pageCount} pages");
+        
+        return $allIssues;
     }
 
     /**
