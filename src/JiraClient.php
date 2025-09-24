@@ -252,9 +252,7 @@ class JiraClient
 
         $this->log->debug('Curl exec='.$url);
         $response = curl_exec($ch);
-        echo $url . PHP_EOL;
-var_dump($response);
-exit;
+
         // if request failed or have no result.
         if (!$response) {
             $this->http_response = curl_getinfo($ch, CURLINFO_HTTP_CODE);
